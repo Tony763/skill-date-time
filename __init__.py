@@ -17,7 +17,8 @@ import holidays
 import pytz
 import re
 import time
-from astral import geocoder
+from timezonefinder import TimezoneFinder
+import geocoder
 
 import mycroft.audio
 from adapt.intent import IntentBuilder
@@ -27,7 +28,7 @@ from mycroft import MycroftSkill, intent_handler, intent_file_handler
 from mycroft.util.parse import (extract_datetime, fuzzy_match, extract_number,
                                 normalize)
 from mycroft.util.time import now_utc, to_local, now_local
-from mycroft.skills.core import resting_screen_handler
+from mycroft.skills import resting_screen_handler
 
 
 def speakable_timezone(tz):
@@ -54,6 +55,7 @@ class TimeSkill(MycroftSkill):
         self.displayed_time = None
         self.display_tz = None
         self.answering_query = False
+        self.default_timezone = None
 
     def initialize(self):
         # Start a callback that repeats every 10 seconds
@@ -99,8 +101,13 @@ class TimeSkill(MycroftSkill):
     def _get_timezone_from_builtins(self, locale):
         try:
             # This handles common city names, like "Dallas" or "Paris"
-            return pytz.timezone(geocoder.lookup(locale, geocoder.database())
-                                         .timezone)
+            # first get the lat / long.
+            g = geocoder.osm(locale)
+            
+            # now look it up
+            tf = TimezoneFinder()
+            timezone = tf.timezone_at(lng=g.lng, lat=g.lat)
+            return pytz.timezone(timezone)
         except Exception:
             pass
 
@@ -169,13 +176,23 @@ class TimeSkill(MycroftSkill):
         """Get the timezone.
 
         This uses a variety of approaches to determine the intended timezone.
+        If locale is the user defined locale, we save that timezone and cache it.
         """
+        
+        # default timezone exists, so return it.
+        if self.default_timezone and locale == self.location_timezone:
+            return self.default_timezone
+
+        # no default timezone has either been requested or saved
         timezone = self._get_timezone_from_builtins(locale)
         if not timezone:
             timezone = self._get_timezone_from_table(locale)
         if not timezone:
             timezone = self._get_timezone_from_fuzzymatch(locale)
 
+        # if the current request is our default timezone, save it.         
+        if locale == self.location_timezone:
+            self.default_timezone = timezone
         return timezone
 
     def get_local_datetime(self, location, dtUTC=None):
